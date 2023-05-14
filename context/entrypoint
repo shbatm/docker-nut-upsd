@@ -6,6 +6,8 @@ export CONFIG_SOURCE
 CONFIG_DEST="/etc/nut"
 export CONFIG_DEST
 
+SNMPD_CONFIG="/etc/snmp/snmpd.conf"
+
 echo "Copying configurations from ${CONFIG_SOURCE} to ${CONFIG_DEST}..."
 
 find $CONFIG_SOURCE -name "*.conf" -exec cp '{}' $CONFIG_DEST \;
@@ -17,5 +19,30 @@ echo "Restarting services..."
 upsdrvctl start
 /etc/init.d/nut-server restart
 
+UPS_NAME=$(grep "^\[.*\]" $CONFIG_DEST/ups.conf | sed -E "s/^\[(.*)\]/\1/")
+export UPS_NAME
+sed -i "s/{{UPSNAME}}/${UPS_NAME}/g" /usr/local/bin/ups-status.sh
+
 echo "Ready on port 3493"
+
+if ! grep -Fq "ups-status.sh" $SNMPD_CONFIG
+then
+    echo "SNMP: Add UPS MIB extensions for all variables reported by upsc for ${UPS_NAME}..."
+    upsc ${UPS_NAME}@localhost | sed 's/^\(.*\): .*$/extend \1 \/usr\/local\/bin\/ups-status.sh \1/' >> /etc/snmp/snmpd.conf
+
+    sed -i "s/agentaddress  127.0.0.1,.*$/agentaddress udp:161/" $SNMPD_CONFIG
+    sed -i 's/rocommunity\(6\|\)\s*public default -V systemonly.*$/rocommunity\1 public/g' $SNMPD_CONFIG
+
+    echo "SNMP: Restarting service..."
+    /etc/init.d/snmpd restart
+fi
+
+echo ""
+echo "nut-server:"
+service nut-server status
+
+echo ""
+echo "snmpd:"
+service snmpd status
+
 tail -F /dev/null
